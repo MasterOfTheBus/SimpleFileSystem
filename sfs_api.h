@@ -1,3 +1,16 @@
+#include <slack/std.h>
+#include <slack/list.h>
+#include <slack/map.h>
+
+typedef struct directory_entry dir_entry;
+typedef struct file_descriptor_entry fd_entry;
+typedef struct file_allocation_entry fat_entry;
+
+Map *directory_table;
+Map *file_descriptor_table;
+Map *file_allocation_table;
+List *free_block_list;
+
 int mksfs(int fresh);
 void sfs_ls(void);
 int sfs_fopen(char *name);
