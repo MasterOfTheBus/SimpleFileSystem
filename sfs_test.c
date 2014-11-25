@@ -6,4 +6,6 @@ int main() {
   if (mksfs(1) != 0) {
     printf("Failed to init the file system\n");
   }
+
+  close_disk();
 }
