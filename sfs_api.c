@@ -386,7 +386,20 @@ int mksfs(int fresh) {
 }
 
 void sfs_ls(void) {
+    Mapper *mapper;
+    mapper = mapper_create(directory_table);
+    if (!mapper) {
+	err_msg("mapper create");
+    }
 
+    while (mapper_has_next(mapper) == 1) {
+	const Mapping *mapping = mapper_next_mapping(mapper);
+	DirEntry* de = (DirEntry*)mapping_value(mapping);
+	printf("%s %s %u %s\n", ctime(de->created), ctime(de->last_modified),
+		de->file_size, (char*)mapping_key(mapping));
+    }
+
+    mapper_destroy(&mapper);
 }
 
 int sfs_fopen(char *name) {
