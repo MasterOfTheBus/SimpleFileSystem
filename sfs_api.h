@@ -5,6 +5,7 @@
 typedef struct directory_entry DirEntry;
 typedef struct file_descriptor_entry FdEntry;
 typedef struct file_allocation_entry FatEntry;
+typedef struct free_block_list_entry FreeEntry;
 
 Map *directory_table;
 Map *file_descriptor_table;
