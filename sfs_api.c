@@ -7,7 +7,7 @@
 #define BLOCKSIZE 512
 #define NUM_BLOCKS 1024 // so .5 GB?
 #define SUPER_BLOCK 0
-#define FAT_SIZE 3 // temp values
+#define FAT_SIZE 2 // temp values
 #define ROOT_SIZE 4 // temp values
 #define MAX_FILES 50 // temp values
 #define MAX_FILE_SIZE 1024 // temp values
@@ -44,7 +44,7 @@ typedef enum {
 } DirBlockNum;
 
 void dirToStr(char* str, DirEntry *de) {
-    snprintf(str, 200, "file size: %u, created: %s, modified: %s\n", de->file_size, ctime(&de->created),
+    sprintf(str, "file size: %u, created: %s, modified: %s", de->file_size, ctime(&de->created),
 	     ctime(&de->last_modified));
 }
 
@@ -56,8 +56,8 @@ int writeDirToDisk(Map *map) {
 	return (-1);
     }
     if (size == 0) {
-	unsigned int file_size[] = {0};
-	if (write_blocks(FILE_SIZE, 1, file_size) == -1) {
+	char* names[] = { "" };
+	if (write_blocks(FILE_NAME, 1, names) == -1) {
 	    printf("Failed to write blocks\n");
 	    return (-1);
 	}
@@ -65,7 +65,7 @@ int writeDirToDisk(Map *map) {
     }
 
     char* names[size];
-    unsigned int file_size[size+1];
+    unsigned int file_size[size];
     time_t created[size];
     time_t modified[size];
 
@@ -76,16 +76,15 @@ int writeDirToDisk(Map *map) {
 	return -1;
     }
 
-    file_size[0] = size;
-
     int i = 0;
     while (mapper_has_next(mapper) == 1) {
 	const Mapping *mapping = mapper_next_mapping(mapper);
 	DirEntry* de = (DirEntry*)mapping_value(mapping);
 	names[i] = (char *)mapping_key(mapping);
-	file_size[i+1] = de->file_size;
+	file_size[i] = de->file_size;
 	created[i] = de->created;
 	modified[i] = de->last_modified;
+	i++;
     }
 
     if (write_blocks(FILE_NAME, 1, names) == -1) {
@@ -112,10 +111,10 @@ int writeDirToDisk(Map *map) {
 int readDirFromDisk(Map *map) {
     unsigned int size = map_size(map);
 
-    char* names[size];
-    unsigned int file_size[size+1];
-    time_t created[size];
-    time_t modified[size];
+    char* names[BLOCKSIZE];
+    unsigned int file_size[BLOCKSIZE];
+    time_t created[BLOCKSIZE];
+    time_t modified[BLOCKSIZE];
  
     if (read_blocks(FILE_NAME, 1, names) == -1) {
 	printf("Failed to read blocks\n");
@@ -135,12 +134,96 @@ int readDirFromDisk(Map *map) {
     }
 
     int i = 0;
-    for (; i < size; i++) {
+    for (; i < BLOCKSIZE; i++) {
+	if (names[i] == "") {
+	    break;
+	}
 	DirEntry* de = malloc(sizeof(DirEntry));
-	de->file_size = file_size[i+1];
+	de->file_size = file_size[i];
 	de->created = created[i];
 	de->last_modified = modified[i];
 	map_add(map, names[i], de);
+    }
+
+    return (0);
+}
+
+//==================FAT Methods=========================
+typedef enum {
+    DATA_BLOCK = 5,
+    NEXT_ENTRY,
+} FatBlockNum;
+
+void FatToStr(char* str, FatEntry *fe) {
+    sprintf(str, "data block: %u, next entry: %d", fe->data_block, fe->next_entry);
+}
+
+int writeFatToDisk(Map *map) {
+    unsigned int size = map_size(map);
+
+    if (size == -1) {
+	printf("Failed to get map size\n");
+	return (-1);
+    }
+
+    unsigned int data[size];
+    int next[size];
+
+    Mapper *mapper;
+    mapper = mapper_create(map);
+    if (!mapper) {
+	map_destroy(&map);
+	return -1;
+    }
+
+    int i = 0;
+    while (mapper_has_next(mapper) == 1) {
+	const Mapping *mapping = mapper_next_mapping(mapper);
+	FatEntry* fe = (FatEntry*)mapping_value(mapping);
+	data[i] = fe->data_block;
+	next[i] = fe->next_entry;
+	i++;
+    }
+
+    if (write_blocks(DATA_BLOCK, 1, data) == -1) {
+	printf("Failed to write blocks\n");
+	return (-1);
+    }
+    if (write_blocks(NEXT_ENTRY, 1, next) == -1) {
+	printf("Failed to write blocks\n");
+	return (-1);
+    }
+
+    mapper_destroy(&mapper);
+    return 0;
+}
+
+int readFatFromDisk(Map *map) {
+    unsigned int size = map_size(map);
+
+    unsigned int data[BLOCKSIZE];
+    int next[BLOCKSIZE];
+ 
+    if (read_blocks(DATA_BLOCK, 1, data) == -1) {
+	printf("Failed to read blocks\n");
+	return (-1);
+    }
+    if (read_blocks(NEXT_ENTRY, 1, next) == -1) {
+	printf("Failed to read blocks\n");
+	return (-1);
+    }
+
+    int i = 0;
+    for (; i < BLOCKSIZE; i++) {
+	if ((data[i] == 0) && (next[i] == 0)) {
+	    break;
+	}
+	FatEntry* fe = malloc(sizeof(FatEntry));
+	fe->data_block = data[i];
+	fe->next_entry = next[i];
+	char* key;
+	sprintf(key, "%d", i);
+	map_add(map, key, fe);
     }
 
     return (0);
