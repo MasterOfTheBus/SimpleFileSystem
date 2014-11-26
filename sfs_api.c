@@ -8,7 +8,7 @@
 #define NUM_BLOCKS 1024 // so .5 GB?
 #define SUPER_BLOCK 0
 #define FAT_SIZE 2 // temp values
-#define ROOT_SIZE 4 // temp values
+#define ROOT_SIZE 5 // temp values
 #define FREE_SIZE 2
 #define MAX_FILES 50 // temp values
 #define MAX_FILE_SIZE 1024 // temp values
@@ -20,6 +20,7 @@ struct directory_entry {
   unsigned int file_size;
   time_t created;
   time_t last_modified;
+  int file_fat_root;
 };
 
 struct file_descriptor_entry {
@@ -38,6 +39,24 @@ struct free_block_list_entry {
   int next;
 };
 
+int fat_index;
+int fd_index;
+
+void *int_copy(const void *key)
+{
+    return (void *)key;
+}
+
+int int_cmp(const void *a, const void *b)
+{
+    return (int)a - (int)b;
+}
+
+size_t int_hash(size_t size, const void *key)
+{
+    return (int)key % size;
+}
+
 //==================Helper Methods====================
 
 //==================Directory Methods================
@@ -46,7 +65,8 @@ typedef enum {
     FILE_NAME = 1,
     FILE_SIZE,
     CREATED,
-    LAST_MODIFIED
+    LAST_MODIFIED,
+    FILE_FAT_ROOT
 } DirBlockNum;
 
 void dirToStr(char* str, DirEntry *de) {
@@ -74,6 +94,7 @@ int writeDirToDisk(Map *map) {
     unsigned int file_size[size];
     time_t created[size];
     time_t modified[size];
+    int fat_root[size];
 
     Mapper *mapper;
     mapper = mapper_create(map);
@@ -90,6 +111,7 @@ int writeDirToDisk(Map *map) {
 	file_size[i] = de->file_size;
 	created[i] = de->created;
 	modified[i] = de->last_modified;
+	fat_root[i] = de->file_fat_root;
 	i++;
     }
 
@@ -109,6 +131,10 @@ int writeDirToDisk(Map *map) {
 	printf("Failed to write blocks\n");
 	return (-1);
     }
+    if (write_blocks(FILE_FAT_ROOT, 1, fat_root) == -1) {
+	printf("Failed to write blocks\n");
+	return (-1);
+    }
 
     mapper_destroy(&mapper);
     return 0;
@@ -120,6 +146,7 @@ int readDirFromDisk(Map *map) {
     unsigned int file_size[BLOCKSIZE];
     time_t created[BLOCKSIZE];
     time_t modified[BLOCKSIZE];
+    int fat_root[BLOCKSIZE];
  
     if (read_blocks(FILE_NAME, 1, names) == -1) {
 	printf("Failed to read blocks\n");
@@ -137,6 +164,10 @@ int readDirFromDisk(Map *map) {
 	printf("Failed to read blocks\n");
 	return (-1);
     }
+    if (read_blocks(FILE_FAT_ROOT, 1, fat_root) == -1) {
+	printf("Failed to read blocks\n");
+	return (-1);
+    }
 
     int i = 0;
     for (; i < BLOCKSIZE; i++) {
@@ -147,6 +178,7 @@ int readDirFromDisk(Map *map) {
 	de->file_size = file_size[i];
 	de->created = created[i];
 	de->last_modified = modified[i];
+	de->file_fat_root = fat_root[i];
 	map_add(map, names[i], de);
     }
 
@@ -154,8 +186,9 @@ int readDirFromDisk(Map *map) {
 }
 
 //==================FAT Methods=========================
+
 typedef enum {
-    DATA_BLOCK = 5,
+    DATA_BLOCK = 6,
     NEXT_ENTRY,
 } FatBlockNum;
 
@@ -225,9 +258,11 @@ int readFatFromDisk(Map *map) {
 	FatEntry* fe = malloc(sizeof(FatEntry));
 	fe->data_block = data[i];
 	fe->next_entry = next[i];
+#if 0
 	char key[5];
 	sprintf(key, "%d", i);
-	map_add(map, key, fe);
+#endif
+	map_add(map, (void*)i, fe);
     }
 
     return (0);
@@ -235,7 +270,7 @@ int readFatFromDisk(Map *map) {
 
 //==================Free Methods=========================
 typedef enum {
-    BLOCK = 7,
+    BLOCK = 8,
     NEXT
 } FreeBlockNum;
 
@@ -309,6 +344,7 @@ int readFreeFromDisk(List *list) {
 //==================End Helper Methods===================
 
 int mksfs(int fresh) {
+    fat_index = 0;
 
     // create the in memory tables
     directory_table = map_create(free);
@@ -316,12 +352,14 @@ int mksfs(int fresh) {
 	err_msg("map create");
     }
 
-    file_descriptor_table = map_create(NULL);
+    file_descriptor_table = map_create_generic(int_copy, int_cmp, int_hash,
+					       NULL, free);
     if (!file_descriptor_table) {
 	err_msg("map create");
     }
 
-    file_allocation_table = map_create(free);
+    file_allocation_table = map_create_generic(int_copy, int_cmp, int_hash,
+					       NULL, free);
     if (!file_allocation_table) {
 	err_msg("map create");
     }
@@ -389,13 +427,14 @@ void sfs_ls(void) {
     Mapper *mapper;
     mapper = mapper_create(directory_table);
     if (!mapper) {
-	err_msg("mapper create");
+	printf("Could not list directory entries");
+	return;	
     }
 
     while (mapper_has_next(mapper) == 1) {
 	const Mapping *mapping = mapper_next_mapping(mapper);
 	DirEntry* de = (DirEntry*)mapping_value(mapping);
-	printf("%s %s %u %s\n", ctime(de->created), ctime(de->last_modified),
+	printf("%s %s %u %s\n", ctime(&de->created), ctime(&de->last_modified),
 		de->file_size, (char*)mapping_key(mapping));
     }
 
@@ -404,6 +443,59 @@ void sfs_ls(void) {
 
 int sfs_fopen(char *name) {
 
+    // check if it exists in the directory
+    DirEntry* dEntry = map_get(directory_table, name);
+    if (!dEntry) {
+	// create entry in fat
+	// find free block
+	FreeEntry* free_entry = list_shift(free_block_list);
+	if (!free_entry) {
+	    printf("Could not remove item from list\n");
+	    return (-1);
+	}
+	FatEntry* fat_entry = malloc(sizeof(FatEntry));
+	fat_entry->data_block = free_entry->block;
+	fat_entry->next_entry = -1;
+	free(free_entry);
+	fat_index++;
+	if (map_add(file_allocation_table, (void*)fat_index, fat_entry) == -1) {
+	    fat_index--;
+	    return (-1);
+	}
+
+	// create new entry in file descriptor table, set pointers and return fd
+	FdEntry* fd = malloc(sizeof(FdEntry));
+	fd->read_ptr = 0;
+	fd->write_ptr = 0;
+	fd->file_fat_root = fat_index;
+	if (map_add(file_descriptor_table, (void*)fd_index, fd) == -1) {
+	    fd_index--;
+	    return(-1);
+	}
+
+	// does not exist then create new directory entry
+	dEntry = malloc(sizeof(DirEntry));
+	dEntry->file_size = 0;
+	time_t timer = time(NULL);
+	dEntry->created = timer;
+	dEntry->last_modified = timer;
+	dEntry->file_fat_root = fat_index;
+	map_add(directory_table, name, dEntry);
+
+    } else {
+        // exists then create a file descriptor table entry for it, set wirte pointer to eof and return fd
+	FdEntry* fd = malloc(sizeof(FdEntry));
+	fd->read_ptr = 0;
+	fd->write_ptr = dEntry->file_size;
+	fd->file_fat_root = dEntry->file_fat_root;
+
+	fd_index++;
+	if (map_add(file_descriptor_table, (void*)fd_index, fd) == -1) {
+	    fd_index--;
+	    return (-1);
+	}
+    }
+    return (fd_index);
 }
 
 int sfs_fclose(int fileID) {
