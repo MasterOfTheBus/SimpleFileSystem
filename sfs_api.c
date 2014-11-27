@@ -1,4 +1,5 @@
 #include <time.h>
+#include <string.h>
 
 #include "sfs_api.h"
 #include "disk_emu.h"
@@ -12,6 +13,7 @@
 #define FREE_SIZE 2
 #define MAX_FILES 50 // temp values
 #define MAX_FILE_SIZE 1024 // temp values
+#define MAX_NAME_LENGTH 50
 
 #define err_msg(msg) \
   perror(msg); return (EXIT_FAILURE);
@@ -63,10 +65,20 @@ size_t int_hash(size_t size, const void *key)
 }
 
 int updateSuperBlock() {
-    int super_block[] = {ROOT_SIZE, FAT_SIZE, free_blocks, data_blocks};
+    int super_block[] = {ROOT_SIZE, FAT_SIZE, free_blocks, data_blocks, -1};
     if (write_blocks(SUPER_BLOCK, 1, super_block) == -1) {
 	return (-1);
     }
+    return (0);
+}
+
+int readSuperBlock() {
+    int super[BLOCKSIZE];
+    if (read_blocks(SUPER_BLOCK, 1, super) == -1) {
+	return (-1);
+    }
+    free_blocks = super[2];
+    data_blocks = super[3];
     return (0);
 }
 
@@ -101,7 +113,9 @@ int writeDirToDisk(Map *map) {
 	return (0);
     }
 
-    char* names[size];
+    int names_size = (size >= BLOCKSIZE) ? BLOCKSIZE : size+1;
+
+    char names[names_size][MAX_NAME_LENGTH];
     unsigned int file_size[size];
     time_t created[size];
     time_t modified[size];
@@ -118,18 +132,24 @@ int writeDirToDisk(Map *map) {
     while (mapper_has_next(mapper) == 1) {
 	const Mapping *mapping = mapper_next_mapping(mapper);
 	DirEntry* de = (DirEntry*)mapping_value(mapping);
-	names[i] = (char *)mapping_key(mapping);
+	strcpy(names[i], (char *)mapping_key(mapping));
 	file_size[i] = de->file_size;
 	created[i] = de->created;
 	modified[i] = de->last_modified;
 	fat_root[i] = de->file_fat_root;
 	i++;
     }
+    
+    if (size < BLOCKSIZE) {
+	printf("coping empty sring");
+        strcpy(names[i], "\0");
+    }
 
     if (write_blocks(FILE_NAME, 1, names) == -1) {
 	printf("Failed to write blocks\n");
 	return (-1);
     }
+
     if (write_blocks(FILE_SIZE, 1, file_size) == -1) {
 	printf("Failed to write blocks\n");
 	return (-1);
@@ -153,12 +173,12 @@ int writeDirToDisk(Map *map) {
 
 int readDirFromDisk(Map *map) {
 
-    char* names[BLOCKSIZE];
+    char names[BLOCKSIZE][MAX_NAME_LENGTH];
     unsigned int file_size[BLOCKSIZE];
     time_t created[BLOCKSIZE];
     time_t modified[BLOCKSIZE];
     int fat_root[BLOCKSIZE];
- 
+
     if (read_blocks(FILE_NAME, 1, names) == -1) {
 	printf("Failed to read blocks\n");
 	return (-1);
@@ -182,7 +202,7 @@ int readDirFromDisk(Map *map) {
 
     int i = 0;
     for (; i < BLOCKSIZE; i++) {
-	if (names[i] == "") {
+	if ((names[i] == "") || !names[i] || (strlen(names[i]) == 0)) {
 	    break;
 	}
 	DirEntry* de = malloc(sizeof(DirEntry));
@@ -429,8 +449,15 @@ int mksfs(int fresh) {
 	}
 
     } else {
-	if (init_disk(DISK_FILE, BLOCKSIZE, NUM_BLOCKS) == -1)
-	    err_msg("disk init");
+	if (init_disk(DISK_FILE, BLOCKSIZE, NUM_BLOCKS) == -1) {
+	    printf("disk init failed\n");
+	    return (-1);
+	}
+
+	if (readSuperBlock() == -1) {
+	    printf("Failed to read from disk");
+	    return (-1);
+	}
 
 	// read the tables from disk
 	if (readDirFromDisk(directory_table) == -1) {
@@ -470,6 +497,12 @@ void sfs_ls(void) {
 }
 
 int sfs_fopen(char *name) {
+
+    if (strlen(name) > MAX_NAME_LENGTH) {
+	printf("Name length exceeds maximum allowed length of %d characters\n",
+		MAX_NAME_LENGTH);
+	return (-1);
+    }
 
     // check if it exists in the directory
     DirEntry* dEntry = map_get(directory_table, name);

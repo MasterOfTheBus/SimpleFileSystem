@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "sfs_api.h"
+#include "disk_emu.h"
 
 int main(int argc, char* argv[]) {
   if (argc != 2) {
@@ -19,12 +20,14 @@ int main(int argc, char* argv[]) {
     if (sfs_fopen("test.txt") == -1) {
       printf("Failed to create file\n");
       return (1);
-    }
+    }   
   } else {
+#if 0
     if (sfs_fopen("test.pdf") == -1) {
       printf("Failed to create file\n");
       return (1);
     }
+#endif
   }
 
   sfs_ls();
