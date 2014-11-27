@@ -7,7 +7,7 @@
 #define BLOCKSIZE 512
 #define NUM_BLOCKS 1024 // so .5 GB?
 #define SUPER_BLOCK 0
-#define FAT_SIZE 2 // temp values
+#define FAT_SIZE 3 // temp values
 #define ROOT_SIZE 5 // temp values
 #define FREE_SIZE 2
 #define MAX_FILES 50 // temp values
@@ -188,8 +188,9 @@ int readDirFromDisk(Map *map) {
 //==================FAT Methods=========================
 
 typedef enum {
-    DATA_BLOCK = 6,
-    NEXT_ENTRY,
+    FAT_INDEX = 6,
+    DATA_BLOCK,
+    NEXT_ENTRY
 } FatBlockNum;
 
 void FatToStr(char* str, FatEntry *fe) {
@@ -204,6 +205,7 @@ int writeFatToDisk(Map *map) {
 	return (-1);
     }
 
+    int index[size];
     unsigned int data[size];
     int next[size];
 
@@ -218,6 +220,7 @@ int writeFatToDisk(Map *map) {
     while (mapper_has_next(mapper) == 1) {
 	const Mapping *mapping = mapper_next_mapping(mapper);
 	FatEntry* fe = (FatEntry*)mapping_value(mapping);
+	index[i] = (int)mapping_key(mapping);
 	data[i] = fe->data_block;
 	next[i] = fe->next_entry;
 	i++;
@@ -231,6 +234,10 @@ int writeFatToDisk(Map *map) {
 	printf("Failed to write blocks\n");
 	return (-1);
     }
+    if (write_blocks(FAT_INDEX, 1, index) == -1) {
+	printf("Failed to write blocks\n");
+	return (-1);
+    }
 
     mapper_destroy(&mapper);
     return 0;
@@ -240,12 +247,17 @@ int readFatFromDisk(Map *map) {
 
     unsigned int data[BLOCKSIZE];
     int next[BLOCKSIZE];
- 
+    int index[BLOCKSIZE];
+
     if (read_blocks(DATA_BLOCK, 1, data) == -1) {
 	printf("Failed to read blocks\n");
 	return (-1);
     }
     if (read_blocks(NEXT_ENTRY, 1, next) == -1) {
+	printf("Failed to read blocks\n");
+	return (-1);
+    }
+    if (read_blocks(FAT_INDEX, 1, index) == -1) {
 	printf("Failed to read blocks\n");
 	return (-1);
     }
@@ -258,11 +270,7 @@ int readFatFromDisk(Map *map) {
 	FatEntry* fe = malloc(sizeof(FatEntry));
 	fe->data_block = data[i];
 	fe->next_entry = next[i];
-#if 0
-	char key[5];
-	sprintf(key, "%d", i);
-#endif
-	map_add(map, (void*)i, fe);
+	map_add(map, (void*)index[i], fe);
     }
 
     return (0);
@@ -270,7 +278,7 @@ int readFatFromDisk(Map *map) {
 
 //==================Free Methods=========================
 typedef enum {
-    BLOCK = 8,
+    BLOCK = 9,
     NEXT
 } FreeBlockNum;
 
