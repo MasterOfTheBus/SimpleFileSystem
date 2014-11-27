@@ -141,7 +141,6 @@ int writeDirToDisk(Map *map) {
     }
     
     if (size < BLOCKSIZE) {
-	printf("coping empty sring");
         strcpy(names[i], "\0");
     }
 
@@ -577,7 +576,16 @@ int sfs_fopen(char *name) {
 }
 
 int sfs_fclose(int fileID) {
-
+    FdEntry* fd = map_get(file_descriptor_table, (void*)fileID);
+    if (!fd) {
+	printf("Fd does not exist\n");
+	return (-1);
+    }
+    if (map_remove(file_descriptor_table, (void*)fd) == -1) {
+	printf("Could not close file descriptor: %d\n", fileID);
+	return (-1);
+    }
+    return (0);
 }
 
 int sfs_fwrite(int fileID, char *buf, int length) {
@@ -593,6 +601,35 @@ int sfs_fseek(int fileID, int offset) {
 }
 
 int sfs_remove(char *file) {
+    DirEntry* dir_entry = map_get(directory_table, file);
+    if (!dir_entry) {
+	printf("File (%s) does not exist\n", file);
+	return (-1);
+    }
+    int fat_index = dir_entry->file_fat_root;
 
+    while (fat_index != -1) {
+	FatEntry* fat_entry = map_get(file_allocation_table, (void*)fat_index);
+	if (!fat_entry) {
+	    printf("Error deleting file\n");
+	    return (-1);
+	}
+	if (map_remove(file_allocation_table, (void*)fat_index) == -1) {
+	    printf("Error deleting file\n");
+	    return (-1);
+	}
+	FreeEntry* free_entry = malloc(sizeof(FreeEntry));
+	free_entry->block = fat_entry->data_block;
+	free_entry->next = -1;
+	FreeEntry* last_entry = list_item(free_block_list, -1);
+	if (!last_entry) {
+	    printf("Error deleting file");
+	    return (-1);
+	}
+	last_entry->next = fat_entry->data_block;
+	list_append(free_block_list, free_entry); 
+
+	fat_index = fat_entry->next_entry;
+    }
 }
 

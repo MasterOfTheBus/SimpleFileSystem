@@ -22,12 +22,10 @@ int main(int argc, char* argv[]) {
       return (1);
     }   
   } else {
-#if 0
     if (sfs_fopen("test.pdf") == -1) {
       printf("Failed to create file\n");
       return (1);
     }
-#endif
   }
 
   sfs_ls();
