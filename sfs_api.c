@@ -401,10 +401,7 @@ int readFreeFromDisk(List *list) {
 //==================End Helper Methods===================
 
 int mksfs(int fresh) {
-    fat_index = 0;
     fd_index = 0;
-    free_blocks =(NUM_BLOCKS - FAT_SIZE - FREE_SIZE - ROOT_SIZE-1);
-    data_blocks = 0;
 
     // create the in memory tables
     directory_table = map_create(free);
@@ -431,6 +428,9 @@ int mksfs(int fresh) {
 
     // init the disk
     if (fresh) {
+	free_blocks =(NUM_BLOCKS - FAT_SIZE - FREE_SIZE - ROOT_SIZE-1);
+	fat_index = 0;
+	data_blocks = 0;
 	if (init_fresh_disk(DISK_FILE, BLOCKSIZE, NUM_BLOCKS) == -1)
 	    printf("Couldn't init fresh disk\n");
 
@@ -479,6 +479,8 @@ int mksfs(int fresh) {
 	if (readFatFromDisk(file_allocation_table) == -1) {
 	    err_msg("read from disk");
 	}
+
+	fat_index = map_size(file_allocation_table) + 1;
 
 	if (readFreeFromDisk(free_block_list) == -1) {
 	    err_msg("read from disk");
@@ -540,6 +542,7 @@ int sfs_fopen(char *name) {
 	fd->read_ptr = 0;
 	fd->write_ptr = 0;
 	fd->file_fat_root = fat_index;
+	printf("fat_index: %d, file_fat_root: %d\n", fat_index, fd->file_fat_root);
 	fd_index++;
 	if (map_add(file_descriptor_table, (void*)fd_index, fd) == -1) {
 	    fd_index--;
@@ -588,7 +591,7 @@ int sfs_fclose(int fileID) {
 	printf("Fd does not exist\n");
 	return (-1);
     }
-    if (map_remove(file_descriptor_table, (void*)fd) == -1) {
+    if (map_remove(file_descriptor_table, (void*)fileID) == -1) {
 	printf("Could not close file descriptor: %d\n", fileID);
 	return (-1);
     }
@@ -618,30 +621,40 @@ int sfs_remove(char *file) {
     while (fat_index != -1) {
 	FatEntry* fat_entry = map_get(file_allocation_table, (void*)fat_index);
 	if (!fat_entry) {
-	    printf("Error deleting file\n");
+	    printf("Error getting fat entry\n");
 	    return (-1);
 	}
 	if (map_remove(file_allocation_table, (void*)fat_index) == -1) {
-	    printf("Error deleting file\n");
+	    printf("Error deleting file allocation block\n");
 	    return (-1);
 	}
+
 	FreeEntry* free_entry = malloc(sizeof(FreeEntry));
 	free_entry->block = fat_entry->data_block;
 	free_entry->next = -1;
-	FreeEntry* last_entry = list_item(free_block_list, -1);
-	if (!last_entry) {
-	    printf("Error deleting file");
-	    return (-1);
+	ssize_t index = list_last(free_block_list);
+	if (index != -1) {
+	    FreeEntry* last_entry = list_item(free_block_list, index);
+	    if (!last_entry) {
+		printf("Error putting blocks back in free list\n");
+		return (-1);
+	    }
+	    last_entry->next = fat_entry->data_block;
 	}
-	last_entry->next = fat_entry->data_block;
 	list_append(free_block_list, free_entry); 
 
 	fat_index = fat_entry->next_entry;
     }
 
     if (writeToDiskStructures() == -1) {
-	err_msg("Failed to delete file")
+	err_msg("Failed to delete file\n");
     }
+
+    if (map_remove(directory_table, file) == -1) {
+	printf("Error deleting file\n");
+	return (-1);
+    }
+
     return (0);
 }
 
