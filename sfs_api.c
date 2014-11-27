@@ -345,6 +345,7 @@ int readFreeFromDisk(List *list) {
 
 int mksfs(int fresh) {
     fat_index = 0;
+    fd_index = 0;
 
     // create the in memory tables
     directory_table = map_create(free);
@@ -354,7 +355,7 @@ int mksfs(int fresh) {
 
     file_descriptor_table = map_create_generic(int_copy, int_cmp, int_hash,
 					       NULL, free);
-    if (!file_descriptor_table) {
+   if (!file_descriptor_table) {
 	err_msg("map create");
     }
 
@@ -434,8 +435,10 @@ void sfs_ls(void) {
     while (mapper_has_next(mapper) == 1) {
 	const Mapping *mapping = mapper_next_mapping(mapper);
 	DirEntry* de = (DirEntry*)mapping_value(mapping);
-	printf("%s %s %u %s\n", ctime(&de->created), ctime(&de->last_modified),
-		de->file_size, (char*)mapping_key(mapping));
+	char * created = strtok(ctime(&de->created), "\n");
+	char * modified = strtok(ctime(&de->last_modified), "\n");
+	printf("%s %s %u %s\n", created, modified, de->file_size,
+		(char*)mapping_key(mapping));
     }
 
     mapper_destroy(&mapper);
@@ -450,8 +453,7 @@ int sfs_fopen(char *name) {
 	// find free block
 	FreeEntry* free_entry = list_shift(free_block_list);
 	if (!free_entry) {
-	    printf("Could not remove item from list\n");
-	    return (-1);
+	    err_msg("Could not remove item from list");
 	}
 	FatEntry* fat_entry = malloc(sizeof(FatEntry));
 	fat_entry->data_block = free_entry->block;
@@ -460,7 +462,7 @@ int sfs_fopen(char *name) {
 	fat_index++;
 	if (map_add(file_allocation_table, (void*)fat_index, fat_entry) == -1) {
 	    fat_index--;
-	    return (-1);
+	    err_msg("Could not add new Fat entry");
 	}
 
 	// create new entry in file descriptor table, set pointers and return fd
@@ -468,9 +470,10 @@ int sfs_fopen(char *name) {
 	fd->read_ptr = 0;
 	fd->write_ptr = 0;
 	fd->file_fat_root = fat_index;
+	fd_index++;
 	if (map_add(file_descriptor_table, (void*)fd_index, fd) == -1) {
 	    fd_index--;
-	    return(-1);
+	    err_msg("Could not add new fd entry");
 	}
 
 	// does not exist then create new directory entry
@@ -480,7 +483,10 @@ int sfs_fopen(char *name) {
 	dEntry->created = timer;
 	dEntry->last_modified = timer;
 	dEntry->file_fat_root = fat_index;
-	map_add(directory_table, name, dEntry);
+	if (map_add(directory_table, name, dEntry) == -1) {
+	    err_msg("Could not add new directory entry");
+	    return (-1);
+	}
 
     } else {
         // exists then create a file descriptor table entry for it, set wirte pointer to eof and return fd

@@ -7,5 +7,12 @@ int main() {
     printf("Failed to init the file system\n");
   }
 
+  if (sfs_fopen("test.txt") == -1) {
+    printf("Failed to create file\n");
+    return (1);
+  }
+
+  sfs_ls();
+
   close_disk();
 }
