@@ -82,6 +82,19 @@ int readSuperBlock() {
     return (0);
 }
 
+int writeToDiskStructures() {
+    if (writeFatToDisk(file_allocation_table) == -1) {
+	return (-1);
+    }
+    if (writeDirToDisk(directory_table) == -1) {
+	return (-1);
+    }
+    if (writeFreeToDisk(free_block_list) == -1) {
+	return (-1);
+    }
+    return (0);
+}
+
 //==================Directory Methods================
 // enum for the block number of the directory table entries
 typedef enum {
@@ -545,13 +558,7 @@ int sfs_fopen(char *name) {
 	}
 
 	// modify the content on disk
-	if (writeFatToDisk(file_allocation_table) == -1) {
-	    err_msg("Could not write to disk");
-	}
-	if (writeDirToDisk(directory_table) == -1) {
-	    err_msg("Could not write to disk");
-	}
-	if (writeFreeToDisk(free_block_list) == -1) {
+	if (writeToDiskStructures() == -1) {
 	    err_msg("Could not write to disk");
 	}
 	data_blocks++;
@@ -631,5 +638,10 @@ int sfs_remove(char *file) {
 
 	fat_index = fat_entry->next_entry;
     }
+
+    if (writeToDiskStructures() == -1) {
+	err_msg("Failed to delete file")
+    }
+    return (0);
 }
 

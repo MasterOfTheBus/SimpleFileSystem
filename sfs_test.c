@@ -22,9 +22,20 @@ int main(int argc, char* argv[]) {
       return (1);
     }   
   } else {
-    if (sfs_fopen("test.pdf") == -1) {
+    int fd = sfs_fopen("test.pdf");
+    if (fd == -1) {
       printf("Failed to create file\n");
       return (1);
+    }
+
+    if (sfs_fclose(fd) == -1) {
+	printf("Failed to close file\n");
+	return (-1);
+    }
+
+    if (sfs_remove("test.txt") == -1) {
+	printf("Failed to remove file\n");
+	return (-1);
     }
   }
 
