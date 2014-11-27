@@ -12,6 +12,7 @@ int main(int argc, char* argv[]) {
 
   if (mksfs(fresh) != 0) {
     printf("Failed to init the file system\n");
+    return (1);
   }
 
   if (fresh) {

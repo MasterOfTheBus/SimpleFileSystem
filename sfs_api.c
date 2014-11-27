@@ -41,7 +41,12 @@ struct free_block_list_entry {
 
 int fat_index;
 int fd_index;
+int free_blocks;
+int data_blocks;
 
+//===================Helper Methods======================
+
+//===============Misc Helper=============================
 void *int_copy(const void *key)
 {
     return (void *)key;
@@ -57,7 +62,13 @@ size_t int_hash(size_t size, const void *key)
     return (int)key % size;
 }
 
-//==================Helper Methods====================
+int updateSuperBlock() {
+    int super_block[] = {ROOT_SIZE, FAT_SIZE, free_blocks, data_blocks};
+    if (write_blocks(SUPER_BLOCK, 1, super_block) == -1) {
+	return (-1);
+    }
+    return (0);
+}
 
 //==================Directory Methods================
 // enum for the block number of the directory table entries
@@ -263,6 +274,7 @@ int readFatFromDisk(Map *map) {
     }
 
     int i = 0;
+    int max = -1;
     for (; i < BLOCKSIZE; i++) {
 	if ((data[i] == 0) && (next[i] == 0)) {
 	    break;
@@ -271,7 +283,11 @@ int readFatFromDisk(Map *map) {
 	fe->data_block = data[i];
 	fe->next_entry = next[i];
 	map_add(map, (void*)index[i], fe);
+	if (index[i] > max) {
+	    max = index[i];
+	}
     }
+    fat_index = max;
 
     return (0);
 }
@@ -349,11 +365,14 @@ int readFreeFromDisk(List *list) {
 
     return (0);
 }
+
 //==================End Helper Methods===================
 
 int mksfs(int fresh) {
     fat_index = 0;
     fd_index = 0;
+    free_blocks =(NUM_BLOCKS - FAT_SIZE - FREE_SIZE - ROOT_SIZE-1);
+    data_blocks = 0;
 
     // create the in memory tables
     directory_table = map_create(free);
@@ -380,14 +399,12 @@ int mksfs(int fresh) {
 
     // init the disk
     if (fresh) {
-	int free_blocks = (NUM_BLOCKS - FAT_SIZE - FREE_SIZE - ROOT_SIZE-1);
 	if (init_fresh_disk(DISK_FILE, BLOCKSIZE, NUM_BLOCKS) == -1)
 	    printf("Couldn't init fresh disk\n");
 
 	// super block
-	int super_block[] = {ROOT_SIZE, FAT_SIZE, free_blocks, 0};
-	if (write_blocks(0, 1, super_block) == -1) {
-	    err_msg("write blocks");
+	if (updateSuperBlock() == -1) {
+	    err_msg("write to disk");
 	}
 
 	if (writeDirToDisk(directory_table) == -1) {
@@ -493,9 +510,23 @@ int sfs_fopen(char *name) {
 	dEntry->file_fat_root = fat_index;
 	if (map_add(directory_table, name, dEntry) == -1) {
 	    err_msg("Could not add new directory entry");
-	    return (-1);
 	}
 
+	// modify the content on disk
+	if (writeFatToDisk(file_allocation_table) == -1) {
+	    err_msg("Could not write to disk");
+	}
+	if (writeDirToDisk(directory_table) == -1) {
+	    err_msg("Could not write to disk");
+	}
+	if (writeFreeToDisk(free_block_list) == -1) {
+	    err_msg("Could not write to disk");
+	}
+	data_blocks++;
+	free_blocks--;
+	if (updateSuperBlock() == -1) {
+	    err_msg("Could not write to disk");
+	}
     } else {
         // exists then create a file descriptor table entry for it, set wirte pointer to eof and return fd
 	FdEntry* fd = malloc(sizeof(FdEntry));
