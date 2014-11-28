@@ -28,10 +28,12 @@ int main(int argc, char* argv[]) {
 	}
     } else if (atoi(argv[1]) == 2) {
 	printf("shh secret debug\n");
+	printf("size of char: %d, size of int: %d\n", sizeof(char), sizeof(int));
 	#if 0
 	char* read[512];
 	if (read_blocks(
 	#endif
+	return 0;
     } else {
 	printf("must be 0 or 1\n");
 	return (-1);

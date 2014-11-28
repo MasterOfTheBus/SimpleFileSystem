@@ -4,4 +4,5 @@ sfst
 CCDisk
 *~
 *.swp
-disk_emu.c
+disk_test.c
+a.out
