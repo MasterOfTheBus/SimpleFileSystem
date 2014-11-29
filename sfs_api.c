@@ -619,57 +619,90 @@ int sfs_fclose(int fileID) {
 }
 
 int sfs_fwrite(int fileID, char *buf, int length) {
-#if 0
+    int written_bytes = 0;
     FdEntry* fd = map_get(file_descriptor_table, (void*)fileID);
     if (!fd) {
 	printf("Invalid file descriptor\n");
 	return (-1);
     }
-    int write_ptr = fd->write_ptr;
-    FatEntry* fat_entry;
-    int fat_index = fd->file_fat_root;
-    int num_blocks = 0;
-    while (fat_index != -1) {
-	fat_entry = map_get(file_allocation_table, (void*)fat_index);
-	if (!fat_entry) {
-	    printf("Error getting fat entry\n");
-	    return (-1);
-	}
-	fat_index = fat_entry->next_entry;
-	num_blocks++;
-    }
-    int last_block = fat_entry->data_block;
-
-    char read[BLOCKSIZE];
-    if (read_blocks(last_block, 1, read) == -1) {
-	printf("Error writing\n");
+    FatEntry* fat_entry = map_get(file_allocation_table, (void*)fd->file_fat_root);
+    if (!fat_entry) {
+	printf("Couldn't read from disk\n");
 	return (-1);
     }
-    int remaining_space_in_last_block = (BLOCKSIZE * num_blocks) - fd->file_size;
-    if (length <= remaining_space_in_last_block) {
-	strcat(read, buf);
-	if (write_blocks(last_block, 1, read) == -1) {
-	    printf("Could not write to disk\n");
+    int block_offset = calcBlockNum(fd->write_ptr);
+    if (getFatEntryAt(block_offset, fat_entry) == -1) {
+	printf("pointer outside of file range\n");
+	return (-1);
+    }
+
+    // determine the number of blocks to be allocated
+    int block = fat_entry->data_block;
+    List *buf_queue = list_create(NULL);
+    if (!buf_queue) {
+	printf("error");
+	return (-1);
+    }
+    list_append(buf_queue, buf);
+
+    int next = fat_entry->next_entry;
+    int written_from_buf = 0;
+    int write_ptr = fd->write_ptr;
+    do {
+	char read[BLOCKSIZE];
+	if (read_blocks(block, 1, read) == -1) {
 	    return (-1);
 	}
+	int data_in_block = strcspn(read, "\0");
+	int remaining_space = BLOCKSIZE - data_in_block;
+	int ptr_relative_pos = write_ptr % BLOCKSIZE;
 
-    } else {
-	// TODO: allocation of FAT entries; adjusting the data and free sizes
-	int data_last = BLOCKSIZE - remining_space_in_last_block;
-	int size = length + (BLOCKSIZE - remining_space_in_last_block);
-	char write[size];
-	strncat(write, read, data_last);
-	strcat(write, buf);
-	int blocks_to_write = (length + data_last) / BLOCKSIZE;
-	if (write_blocks(last_block, blocks_to_write, write) == -1) {
+	char* remaining_data;
+	// the point here is to write to the block read in
+	char* write_buf = list_item(buf_queue, 1);
+	int buf_length = strcspn(write_buf, "\0") - written_from_buf;
+	if (buf_length < remaining_space) {
+	    strcpy(read + ptr_relative_pos, write_buf);
+	    written_from_buf += buf_length; 
+	    strncpy(read + ptr_relative_pos + buf_length, write_buf, remaining_space - buf_length);
+	    strcpy(remaining_data, read + ptr_relative_pos + buf_length);
+	} else if (buf_length >= remaining_space) {
+	    strncpy(read + ptr_relative_pos, write_buf, remaining_space);
+	    written_from_buf += remaining_space;
+	}
+	if (write_blocks(block, 1, read) == -1) {
 	    printf("Failed to write to disk\n");
 	    return (-1);
 	}
-    }
-    // flush to disk
-    // increment lenght
-    fd->file_size += length;
-#endif
+
+	if (ptr_relative_pos > data_in_block) {
+	    // this case shouldn't happen if fssek does it's job properly
+	    printf("seg fault\n");
+	    return (-1);
+	} else if (ptr_relative_pos < data_in_block) {
+	    // the point here is to buffer the data that must be shifted
+	    list_append(buf_queue, remaining_data);
+	}
+
+	write_ptr += buf_length;
+	if (length > 0) { 
+	    fd->write_ptr += buf_length;
+	    written_bytes += buf_length;
+	    length -= buf_length;
+	} 
+	fat_entry = map_get(file_allocation_table, (void*)next);
+	if (!fat_entry) {
+	    return (-1);
+	}
+	next = fat_entry->next_entry;
+	block = fat_entry->data_block;
+	if (written_from_buf == BLOCKSIZE) {
+	    list_shift(buf_queue); 
+	    written_from_buf = 0;
+	}
+    } while (next != -1 && !list_empty(buf_queue));
+
+    return (written_bytes);
 }
 
 /*
@@ -733,15 +766,41 @@ int sfs_fseek(int fileID, int offset) {
 	return (-1);
     }
 
-    if (fd->write_ptr + offset < 0) {
+    if (fd->write_ptr + offset < 0 || fd->read_ptr + offset < 0) {
 	printf("seeking to before beginning of file\n");
 	return (-1);
     }
-    if (fd->read_ptr + offset < 0) {
-	printf("seeking to before beginning of file\n");
+    
+    FatEntry* fat_entry = map_get(file_allocation_table, (void*)fd->file_fat_root);
+    if (!fat_entry) {
+	printf("Couldn't read from disk\n");
 	return (-1);
     }
+    int next = fat_entry->next_entry; 
+    int length = 0; 
+    do {
+	int block = fat_entry->data_block;
 
+	// first read what's in the current block
+	char read[BLOCKSIZE];
+	if (read_blocks(block, 1, read) == -1) {
+	    printf("Error reading from disk\n");
+	    return (-1);
+	}
+	length += strcspn(read, "\0");
+
+	fat_entry = map_get(file_allocation_table, (void*)next);
+	if (!fat_entry) {
+	    printf("Error reading\n");
+	    return (-1);
+	}
+	next = fat_entry->next_entry;
+    } while (next != -1);
+   
+    if (fd->write_ptr + offset > length || fd->read_ptr + offset > length) {
+	printf("Seeking to after end of file\n");
+	return (-1);
+    }
     fd->write_ptr = fd->write_ptr + offset;
     fd->read_ptr = fd->read_ptr + offset;
 
