@@ -261,7 +261,7 @@ void FatToStr(char* str, FatEntry *fe) {
 }
 
 int writeFatToDisk(Map *map) {
-    unsigned int size = map_size(map);
+    unsigned int size = (map_size(map) == BLOCKSIZE) ? BLOCKSIZE : map_size(map) + 1;
 
     if (size == -1) {
 	printf("Failed to get map size\n");
@@ -288,7 +288,11 @@ int writeFatToDisk(Map *map) {
 	next[i] = fe->next_entry;
 	i++;
     }
-
+    if (map_size(map) != BLOCKSIZE) {
+	index[i] = -1;
+	data[i] = 0;
+	next[i] = 0;
+    }
     if (write_blocks(DATA_BLOCK, 1, data) == -1) {
 	printf("Failed to write blocks\n");
 	return (-1);
@@ -328,13 +332,14 @@ int readFatFromDisk(Map *map) {
     int i = 0;
     int max = -1;
     for (; i < BLOCKSIZE; i++) {
-	if ((data[i] == 0) && (next[i] == 0)) {
+	if ((data[i] == 0) || (next[i] == 0) || (index[i] == -1)) {
 	    break;
 	}
 	FatEntry* fe = malloc(sizeof(FatEntry));
 	fe->data_block = data[i];
 	fe->next_entry = next[i];
 	map_add(map, (void*)index[i], fe);
+	printf("reading fat index: %d\n", index[i]);
 	if (index[i] > max) {
 	    max = index[i];
 	}
@@ -499,9 +504,7 @@ int mksfs(int fresh) {
 	if (readFatFromDisk(file_allocation_table) == -1) {
 	    err_msg("read from disk");
 	}
-
-	fat_index = map_size(file_allocation_table) + 1;
-
+printf("fat_index: %d\n", fat_index);
 	if (readFreeFromDisk(free_block_list) == -1) {
 	    err_msg("read from disk");
 	}

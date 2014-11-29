@@ -28,6 +28,17 @@ int main(int argc, char* argv[]) {
       return (1);
     }
 
+    if (sfs_fwrite(fd, "writing to file", 15) == -1) {
+	printf("failed to write to file\n");
+	return (-1);
+    }
+
+    char *buffer;
+    if (sfs_fread(fd, buffer, 15) == -1) {
+	printf("failed to read from file");
+	return (-1);
+    }
+
     if (sfs_fclose(fd) == -1) {
 	printf("Failed to close file\n");
 	return (-1);
