@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
       printf("Failed to create file\n");
       return (1);
     }
-
+printf("fd: %d\n", fd);
     if (sfs_fwrite(fd, "writing to file", 15) == -1) {
 	printf("failed to write to file\n");
 	return (-1);
@@ -35,9 +35,10 @@ int main(int argc, char* argv[]) {
 
     char *buffer;
     if (sfs_fread(fd, buffer, 15) == -1) {
-	printf("failed to read from file");
+	printf("failed to read from file\n");
 	return (-1);
     }
+    printf("%s\n", buffer);
 
     if (sfs_fclose(fd) == -1) {
 	printf("Failed to close file\n");

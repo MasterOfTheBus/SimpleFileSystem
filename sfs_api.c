@@ -96,7 +96,8 @@ int writeToDiskStructures() {
 }
 
 int calcBlockNum(int ptr) {
-    return ((ptr / BLOCKSIZE) + 1);
+    printf("%d / %d = %d\n", ptr, BLOCKSIZE, ptr / BLOCKSIZE);
+    return (ptr / BLOCKSIZE);
 }
 
 int getFatEntryAt(int offset, FatEntry* fat_entry) {
@@ -105,7 +106,9 @@ int getFatEntryAt(int offset, FatEntry* fat_entry) {
     }
     int count = 0;
     int index = fat_entry->next_entry;
+    printf("offset: %d\n", offset);
     while((index != -1) && (count < offset)) {
+	printf("index: %d, count: %d\n", index, count);
 	count++;
 	fat_entry = map_get(file_allocation_table, (void*)index);
 	index = fat_entry->next_entry;
@@ -456,8 +459,9 @@ int mksfs(int fresh) {
 	free_blocks =(NUM_BLOCKS - FAT_SIZE - FREE_SIZE - ROOT_SIZE-1);
 	fat_index = 0;
 	data_blocks = 0;
-	if (init_fresh_disk(DISK_FILE, BLOCKSIZE, NUM_BLOCKS) == -1)
+	if (init_fresh_disk(DISK_FILE, BLOCKSIZE, NUM_BLOCKS) == -1) {
 	    printf("Couldn't init fresh disk\n");
+	}
 
 	// super block
 	if (updateSuperBlock() == -1) {
@@ -472,13 +476,16 @@ int mksfs(int fresh) {
 	int block = NEXT+1;
 	for (; i < free_blocks; i++) {
 	    FreeEntry* fen = malloc(sizeof(FreeEntry));
-	    if (i == 0) fen->block = block;
-	    fen->next = block++;
-	    if (i == free_blocks-1) fen->next = -1;
+	    fen->block = block;
+	    fen->next = block+1;
+	    if (i == free_blocks-1) {
+		fen->next = -1;
+	    }
 	    if (!(list_append(free_block_list, fen))) {
 		err_msg("map add");
 	    }
 	    list_size++;
+	    block++;
 	}
 
 	if (writeFreeToDisk(free_block_list) == -1) {
@@ -628,83 +635,146 @@ int sfs_fwrite(int fileID, char *buf, int length) {
 	printf("Invalid file descriptor\n");
 	return (-1);
     }
+    printf("fileID: %d, file fat root: %d\n", fileID, fd->file_fat_root);
     FatEntry* fat_entry = map_get(file_allocation_table, (void*)fd->file_fat_root);
     if (!fat_entry) {
 	printf("Couldn't read from disk\n");
 	return (-1);
     }
-    int block_offset = calcBlockNum(fd->write_ptr);
-    if (getFatEntryAt(block_offset, fat_entry) == -1) {
+    printf("fat block: %d, fat next: %d\n", fat_entry->data_block, fat_entry->next_entry);
+    if (getFatEntryAt(calcBlockNum(fd->write_ptr), fat_entry) == -1) {
 	printf("pointer outside of file range\n");
 	return (-1);
     }
 
-    // determine the number of blocks to be allocated
-    int block = fat_entry->data_block;
     List *buf_queue = list_create(NULL);
     if (!buf_queue) {
-	printf("error");
+	printf("error\n");
 	return (-1);
     }
     list_append(buf_queue, buf);
+    List *block_queue = list_create(NULL);
+    if (!block_queue) {
+	printf("error\n");
+	return (-1);
+    }
+    list_append(block_queue, fat_entry);
 
-    int next = fat_entry->next_entry;
-    int written_from_buf = 0;
     int write_ptr = fd->write_ptr;
+
+    // save the leftoever data in the block first
+    char after_data[BLOCKSIZE];
+    int after_data_next_block = fat_entry->next_entry;
+    // read the block data
+    char readfirst[BLOCKSIZE];
+    if (read_blocks(fat_entry->data_block, 1, readfirst) == -1) {
+	printf("error reading blocks starting at %d\n", fat_entry->data_block);
+	return (-1);
+    }
+    strcpy(after_data, readfirst + (write_ptr % BLOCKSIZE));
+
+    // write the buf data
     do {
+	if(list_empty(block_queue)) {
+	    printf("error, list empty\n");
+	    return (-1);
+	}
+	FatEntry* f_entry = list_shift(block_queue);
+	int block = f_entry->data_block;
+
+	char* buf_to_write = list_shift(buf_queue);
+	int ptr_relative_pos = write_ptr % BLOCKSIZE;
+	int buf_length = strcspn(buf_to_write, "\0");
+
+	// read the block data
 	char read[BLOCKSIZE];
 	if (read_blocks(block, 1, read) == -1) {
+	    printf("error reading block\n");
 	    return (-1);
 	}
-	int data_in_block = strcspn(read, "\0");
-	int remaining_space = BLOCKSIZE - data_in_block;
-	int ptr_relative_pos = write_ptr % BLOCKSIZE;
+	int data_length = strcspn(read, "\0");
 
-	char* remaining_data;
-	// the point here is to write to the block read in
-	char* write_buf = list_item(buf_queue, 1);
-	int buf_length = strcspn(write_buf, "\0") - written_from_buf;
-	if (buf_length < remaining_space) {
-	    strcpy(read + ptr_relative_pos, write_buf);
-	    written_from_buf += buf_length; 
-	    strncpy(read + ptr_relative_pos + buf_length, write_buf, remaining_space - buf_length);
-	    strcpy(remaining_data, read + ptr_relative_pos + buf_length);
-	} else if (buf_length >= remaining_space) {
-	    strncpy(read + ptr_relative_pos, write_buf, remaining_space);
-	    written_from_buf += remaining_space;
+	// compare the data to write to the available space
+	if (buf_length <= BLOCKSIZE - data_length) {
+	    strcpy(read + ptr_relative_pos, buf_to_write);
+	    write_ptr += buf_length;
+	} else if (buf_length > BLOCKSIZE - data_length) {
+	    // write what can be written
+	    int partial_write = BLOCKSIZE - ptr_relative_pos;
+	    strncpy(read + ptr_relative_pos, buf_to_write, partial_write);
+	    ptr_relative_pos += partial_write;
+
+	    // split up the buffer and save what still needs to be written
+	    int remaining_length = buf_length - partial_write;
+	    strcpy(buf_to_write, buf_to_write + remaining_length);
+
+	    // allocate a block for the remaining data in the buffer
+	    if (list_empty(free_block_list)) {
+		printf("Disk Full\n");
+		return (-1);
+	    }
+	    FreeEntry* free_entry = list_shift(free_block_list);
+	    if (!free_entry) {
+		printf("error block list\n");
+		return (-1);
+	    }
+	    FatEntry* new_fat = malloc(sizeof(FatEntry));
+	    new_fat->data_block = free_entry->block;
+	    new_fat->next_entry = -1;
+	    list_append(block_queue, new_fat);
+	    write_ptr += data_length;
 	}
 	if (write_blocks(block, 1, read) == -1) {
-	    printf("Failed to write to disk\n");
+	    printf("failed to write\n");
 	    return (-1);
 	}
+    } while (!list_empty(buf_queue));
 
-	if (ptr_relative_pos > data_in_block) {
-	    // this case shouldn't happen if fssek does it's job properly
-	    printf("seg fault\n");
+    if (strcspn(after_data, "\0") > 0) {
+	list_append(buf_queue, after_data);
+    }
+    if (after_data_next_block == -1) {
+	return (written_bytes);
+    }
+    fat_entry = map_get(file_allocation_table, (void*)after_data_next_block);
+    if (!fat_entry) {
+	printf("failed allocation\n");
+	return (-1);
+    }
+    list_append(block_queue, fat_entry);
+    int write_bytes = 0;
+    while (!list_empty(buf_queue)) {
+	char* write = list_shift(buf_queue);
+	int buf_length = strcspn(write, "\0");
+	FatEntry* f = list_shift(block_queue);
+	if (!f) {
+	    printf("failed allocation\n");
 	    return (-1);
-	} else if (ptr_relative_pos < data_in_block) {
-	    // the point here is to buffer the data that must be shifted
-	    list_append(buf_queue, remaining_data);
 	}
-
-	write_ptr += buf_length;
-	if (length > 0) { 
-	    fd->write_ptr += buf_length;
-	    written_bytes += buf_length;
-	    length -= buf_length;
-	} 
-	fat_entry = map_get(file_allocation_table, (void*)next);
-	if (!fat_entry) {
+	char read[BLOCKSIZE];
+	char* leftover;
+	if (read_blocks(f->data_block, 1, read) == -1) {
+	    printf("failed read\n");
 	    return (-1);
 	}
-	next = fat_entry->next_entry;
-	block = fat_entry->data_block;
-	if (written_from_buf == BLOCKSIZE) {
-	    list_shift(buf_queue); 
-	    written_from_buf = 0;
+	int read_length = strcspn(read, "\0");
+	strcpy(leftover, read + (BLOCKSIZE - buf_length));
+	if (strcspn(leftover, "\0") > 0) {
+	    list_append(buf_queue, leftover);
 	}
-    } while (next != -1 && !list_empty(buf_queue));
+	int rel_ptr = write_bytes % BLOCKSIZE;
+	if (buf_length > BLOCKSIZE) {
+	    strncpy(read + rel_ptr, write, BLOCKSIZE - (rel_ptr));
+	} else {
+	    strcpy(read + rel_ptr, write);
+	}
+	if (write_blocks(f->data_block, 1, write) == -1) {
+	    printf("failed to write\n");
+	    return (-1);
+	}
+    }
 
+    // write the "after" data
     return (written_bytes);
 }
 
@@ -715,6 +785,7 @@ int sfs_fwrite(int fileID, char *buf, int length) {
  * exceed file length
  */
 int sfs_fread(int fileID, char *buf, int length) {
+    char for_reading[length];
     int read_bytes = 0;
     FdEntry* fd = map_get(file_descriptor_table, (void*)fileID);
     if (!fd) {
@@ -746,11 +817,15 @@ int sfs_fread(int fileID, char *buf, int length) {
 
 	// get what's remaining in the first block
 	int data_end = read_ptr % BLOCKSIZE;
-	int data = BLOCKSIZE - data_end;
-	strncat(buf, read + data_end, data);
+	//int data = BLOCKSIZE - data_end;
+	int data = strcspn(read, "\0");
+	strncat(for_reading, read + data_end, data);
 	read_bytes += data;
 	read_ptr += data;
 
+	if (next == -1) {
+	    continue;
+	}
 	fat_entry = map_get(file_allocation_table, (void*)next);
 	if (!fat_entry) {
 	    printf("Error reading\n");
@@ -758,7 +833,8 @@ int sfs_fread(int fileID, char *buf, int length) {
 	}
 	next = fat_entry->next_entry;
     } while (next != -1 && read_bytes < length);
-
+    fd->read_ptr = read_ptr;
+    buf = for_reading;
     return (read_bytes);
 }
 

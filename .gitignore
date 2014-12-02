@@ -6,3 +6,4 @@ CCDisk
 *.swp
 disk_test.c
 a.out
+temp_store
