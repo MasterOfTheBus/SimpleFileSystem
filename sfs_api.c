@@ -96,7 +96,7 @@ int writeToDiskStructures() {
 }
 
 int calcBlockNum(int ptr) {
-    printf("%d / %d = %d\n", ptr, BLOCKSIZE, ptr / BLOCKSIZE);
+    //printf("%d / %d = %d\n", ptr, BLOCKSIZE, ptr / BLOCKSIZE);
     return (ptr / BLOCKSIZE);
 }
 
@@ -106,9 +106,9 @@ int getFatEntryAt(int offset, FatEntry* fat_entry) {
     }
     int count = 0;
     int index = fat_entry->next_entry;
-    printf("offset: %d\n", offset);
+    //printf("offset: %d\n", offset);
     while((index != -1) && (count < offset)) {
-	printf("index: %d, count: %d\n", index, count);
+	//printf("index: %d, count: %d\n", index, count);
 	count++;
 	fat_entry = map_get(file_allocation_table, (void*)index);
 	index = fat_entry->next_entry;
@@ -342,7 +342,7 @@ int readFatFromDisk(Map *map) {
 	fe->data_block = data[i];
 	fe->next_entry = next[i];
 	map_add(map, (void*)index[i], fe);
-	printf("reading fat index: %d\n", index[i]);
+	//printf("reading fat index: %d\n", index[i]);
 	if (index[i] > max) {
 	    max = index[i];
 	}
@@ -454,6 +454,9 @@ int mksfs(int fresh) {
 	err_msg("map create");
     }
 
+    fd_to_file_table = map_create_generic(int_copy, int_cmp, int_hash,
+					       NULL, free);
+
     // init the disk
     if (fresh) {
 	free_blocks =(NUM_BLOCKS - FAT_SIZE - FREE_SIZE - ROOT_SIZE-1);
@@ -511,7 +514,7 @@ int mksfs(int fresh) {
 	if (readFatFromDisk(file_allocation_table) == -1) {
 	    err_msg("read from disk");
 	}
-printf("fat_index: %d\n", fat_index);
+//printf("fat_index: %d\n", fat_index);
 	if (readFreeFromDisk(free_block_list) == -1) {
 	    err_msg("read from disk");
 	}
@@ -572,7 +575,7 @@ int sfs_fopen(char *name) {
 	fd->read_ptr = 0;
 	fd->write_ptr = 0;
 	fd->file_fat_root = fat_index;
-	printf("fat_index: %d, file_fat_root: %d\n", fat_index, fd->file_fat_root);
+	//printf("fat_index: %d, file_fat_root: %d\n", fat_index, fd->file_fat_root);
 	fd_index++;
 	if (map_add(file_descriptor_table, (void*)fd_index, fd) == -1) {
 	    fd_index--;
@@ -599,16 +602,37 @@ int sfs_fopen(char *name) {
 	if (updateSuperBlock() == -1) {
 	    err_msg("Could not write to disk");
 	}
+	if (map_add(fd_to_file_table, (void*)fd_index, name) == -1) {
+	    fd_index--;
+	    return (-1);
+	}
     } else {
         // exists then create a file descriptor table entry for it, set wirte pointer to eof and return fd
-	FdEntry* fd = malloc(sizeof(FdEntry));
-	fd->read_ptr = 0;
-	fd->write_ptr = dEntry->file_size;
-	fd->file_fat_root = dEntry->file_fat_root;
+	int exists = 0;
+	List *names = map_values(fd_to_file_table);
+	while (list_has_next(names) == 1) {
+	    char* file = (char*)list_next(names);
+	    if (file == name) {
+		exists = 1;
+	    }
+	}
+	if (!exists) {
+	    FdEntry* fd = malloc(sizeof(FdEntry));
+	    fd->read_ptr = 0;
+	    fd->write_ptr = dEntry->file_size;
+	    fd->file_fat_root = dEntry->file_fat_root;
 
-	fd_index++;
-	if (map_add(file_descriptor_table, (void*)fd_index, fd) == -1) {
-	    fd_index--;
+	    fd_index++;
+	    if (map_add(file_descriptor_table, (void*)fd_index, fd) == -1) {
+		fd_index--;
+		return (-1);
+	    }
+	    if (map_add(fd_to_file_table, (void*)fd_index, name) == -1) {
+		fd_index--;
+		return (-1);
+	    }
+	} else {
+	    // an fd already exists for the file
 	    return (-1);
 	}
     }
@@ -625,6 +649,10 @@ int sfs_fclose(int fileID) {
 	printf("Could not close file descriptor: %d\n", fileID);
 	return (-1);
     }
+    if (map_remove(fd_to_file_table, (void*)fileID) == -1) {
+	printf("Couldn't close\n");
+	return (-1);
+    }
     return (0);
 }
 
@@ -635,13 +663,19 @@ int sfs_fwrite(int fileID, char *buf, int length) {
 	printf("Invalid file descriptor\n");
 	return (-1);
     }
-    printf("fileID: %d, file fat root: %d\n", fileID, fd->file_fat_root);
+    char* file = map_get(fd_to_file_table, (void*)fileID);
+    if (!file) {
+	printf("Invalid file descriptor\n");
+	return (-1);
+    }
+
+    //printf("fileID: %d, file fat root: %d\n", fileID, fd->file_fat_root);
     FatEntry* fat_entry = map_get(file_allocation_table, (void*)fd->file_fat_root);
     if (!fat_entry) {
 	printf("Couldn't read from disk\n");
 	return (-1);
     }
-    printf("fat block: %d, fat next: %d\n", fat_entry->data_block, fat_entry->next_entry);
+    //printf("fat block: %d, fat next: %d\n", fat_entry->data_block, fat_entry->next_entry);
     if (getFatEntryAt(calcBlockNum(fd->write_ptr), fat_entry) == -1) {
 	printf("pointer outside of file range\n");
 	return (-1);
@@ -728,53 +762,61 @@ int sfs_fwrite(int fileID, char *buf, int length) {
 	    printf("failed to write\n");
 	    return (-1);
 	}
+	written_bytes += buf_length;
+	printf("written: %d\n", written_bytes);
     } while (!list_empty(buf_queue));
 
     if (strcspn(after_data, "\0") > 0) {
 	list_append(buf_queue, after_data);
     }
-    if (after_data_next_block == -1) {
-	return (written_bytes);
-    }
-    fat_entry = map_get(file_allocation_table, (void*)after_data_next_block);
-    if (!fat_entry) {
-	printf("failed allocation\n");
-	return (-1);
-    }
-    list_append(block_queue, fat_entry);
-    int write_bytes = 0;
-    while (!list_empty(buf_queue)) {
-	char* write = list_shift(buf_queue);
-	int buf_length = strcspn(write, "\0");
-	FatEntry* f = list_shift(block_queue);
-	if (!f) {
+    if (after_data_next_block != -1) {
+	fat_entry = map_get(file_allocation_table, (void*)after_data_next_block);
+	if (!fat_entry) {
 	    printf("failed allocation\n");
 	    return (-1);
 	}
-	char read[BLOCKSIZE];
-	char* leftover;
-	if (read_blocks(f->data_block, 1, read) == -1) {
-	    printf("failed read\n");
-	    return (-1);
-	}
-	int read_length = strcspn(read, "\0");
-	strcpy(leftover, read + (BLOCKSIZE - buf_length));
-	if (strcspn(leftover, "\0") > 0) {
-	    list_append(buf_queue, leftover);
-	}
-	int rel_ptr = write_bytes % BLOCKSIZE;
-	if (buf_length > BLOCKSIZE) {
-	    strncpy(read + rel_ptr, write, BLOCKSIZE - (rel_ptr));
-	} else {
-	    strcpy(read + rel_ptr, write);
-	}
-	if (write_blocks(f->data_block, 1, write) == -1) {
-	    printf("failed to write\n");
-	    return (-1);
+	list_append(block_queue, fat_entry);
+	int write_bytes = 0;
+	while (!list_empty(buf_queue)) {
+	    char* write = list_shift(buf_queue);
+	    int buf_length = strcspn(write, "\0");
+	    FatEntry* f = list_shift(block_queue);
+	    if (!f) {
+		printf("failed allocation\n");
+		return (-1);
+	    }
+	    char read[BLOCKSIZE];
+	    char* leftover;
+	    if (read_blocks(f->data_block, 1, read) == -1) {
+		printf("failed read\n");
+		return (-1);
+	    }
+	    int read_length = strcspn(read, "\0");
+	    strcpy(leftover, read + (BLOCKSIZE - buf_length));
+	    if (strcspn(leftover, "\0") > 0) {
+		list_append(buf_queue, leftover);
+	    }
+	    int rel_ptr = write_bytes % BLOCKSIZE;
+	    if (buf_length > BLOCKSIZE) {
+		strncpy(read + rel_ptr, write, BLOCKSIZE - (rel_ptr));
+	    } else {
+		strcpy(read + rel_ptr, write);
+	    }
+	    if (write_blocks(f->data_block, 1, write) == -1) {
+		printf("failed to write\n");
+		return (-1);
+	    }
 	}
     }
 
-    // write the "after" data
+    DirEntry* dir = map_get(directory_table, file);
+    if (!dir) {
+	printf("error\n");
+	return (-1);
+    }
+    printf("written bytes: %d\n", written_bytes);
+    dir->file_size += written_bytes;
+
     return (written_bytes);
 }
 
@@ -820,6 +862,7 @@ int sfs_fread(int fileID, char *buf, int length) {
 	//int data = BLOCKSIZE - data_end;
 	int data = strcspn(read, "\0");
 	strncat(for_reading, read + data_end, data);
+	//printf("for_reading: %s\n", for_reading);
 	read_bytes += data;
 	read_ptr += data;
 
@@ -835,6 +878,7 @@ int sfs_fread(int fileID, char *buf, int length) {
     } while (next != -1 && read_bytes < length);
     fd->read_ptr = read_ptr;
     buf = for_reading;
+    //printf("buf: %s\n", buf);
     return (read_bytes);
 }
 
@@ -895,6 +939,7 @@ int sfs_remove(char *file) {
     int fat_index = dir_entry->file_fat_root;
 
     while (fat_index != -1) {
+	//printf("fat_index: %d\n", fat_index);
 	FatEntry* fat_entry = map_get(file_allocation_table, (void*)fat_index);
 	if (!fat_entry) {
 	    printf("Error getting fat entry\n");

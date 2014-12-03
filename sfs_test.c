@@ -4,12 +4,21 @@
 #include "sfs_api.h"
 #include "disk_emu.h"
 
+void sample(char* buf) {
+    buf = "blah";
+}
+
 int main(int argc, char* argv[]) {
   if (argc != 2) {
     printf("Indicate freshness\n");
     return (1);
   }
   int fresh = atoi(argv[1]);
+
+  char* buffer = malloc(sizeof(char)*15);
+  printf("sring: %s\n", buffer);
+  sample(buffer);
+  printf("string after: %s\n", buffer);
 
   if (mksfs(fresh) != 0) {
     printf("Failed to init the file system\n");

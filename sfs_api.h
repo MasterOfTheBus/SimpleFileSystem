@@ -11,6 +11,7 @@ Map *directory_table;
 Map *file_descriptor_table;
 Map *file_allocation_table;
 List *free_block_list;
+Map *fd_to_file_table;
 
 int mksfs(int fresh);
 void sfs_ls(void);
